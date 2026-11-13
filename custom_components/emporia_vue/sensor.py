@@ -31,6 +31,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensor platform."""
+    coordinator_1sec = hass.data[DOMAIN][config_entry.entry_id].get("coordinator_1sec")
     coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
     coordinator_1mon = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1mon"]
     coordinator_day_sensor = hass.data[DOMAIN][config_entry.entry_id][
@@ -38,6 +39,12 @@ async def async_setup_entry(
     ]
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
+
+    if coordinator_1sec:
+        async_add_entities(
+            CurrentVuePowerSensor(coordinator_1sec, identifier)
+            for identifier in coordinator_1sec.data
+        )
 
     if coordinator_1min:
         async_add_entities(
@@ -204,6 +211,8 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
 
     def scale_readable(self):
         """Return a human readable scale."""
+        if self._scale == Scale.SECOND.value:
+            return "1 Second"
         if self._scale == Scale.MINUTE.value:
             return "Minute Average"
         if self._scale == Scale.DAY.value:

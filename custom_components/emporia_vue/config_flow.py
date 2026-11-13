@@ -34,6 +34,10 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
+    ENABLE_1S,
+    FAST_POLL_INTERVAL,
+    FAST_POLL_INTERVAL_VALIDATOR,
+    DEFAULT_FAST_POLL_INTERVAL,
     SOLAR_INVERT,
     TOKEN_CONFIG_FLOW_SCHEMA,
 )
@@ -119,6 +123,10 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
     entry_data = {
         CONFIG_TITLE: f"{hub.vue.customer.email} ({hub.vue.customer.customer_gid})",
         CUSTOMER_GID: f"{hub.vue.customer.customer_gid}",
+        ENABLE_1S: new_data.get(ENABLE_1S, False),
+        FAST_POLL_INTERVAL: new_data.get(
+            FAST_POLL_INTERVAL, DEFAULT_FAST_POLL_INTERVAL
+        ),
         ENABLE_1M: new_data[ENABLE_1M],
         ENABLE_1D: new_data[ENABLE_1D],
         ENABLE_1MON: new_data[ENABLE_1MON],
@@ -148,6 +156,13 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle a config flow for Emporia Vue."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Return the options flow (the integration's Configure button)."""
+        return EmporiaVueOptionsFlow()
     DOMAIN = DOMAIN
     _oauth_provider: str | None = None
 
@@ -192,7 +207,9 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         options = vol.Schema(CONFIG_OPTIONS_SCHEMA)({})
         if self.source == config_entries.SOURCE_REAUTH:
             existing_entry = self._get_reauth_entry()
-            options.update({key: existing_entry.data[key] for key in options})
+            options.update(
+                {key: existing_entry.data.get(key, value) for key, value in options.items()}
+            )
         try:
             info = await validate_input(
                 {
@@ -429,6 +446,35 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+
+class EmporiaVueOptionsFlow(config_entries.OptionsFlow):
+    """Configure the 1-second power sensors and their poll rate."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Show and save the polling options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current = {**self.config_entry.data, **self.config_entry.options}
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        ENABLE_1S, default=current.get(ENABLE_1S, False)
+                    ): cv.boolean,
+                    vol.Optional(
+                        FAST_POLL_INTERVAL,
+                        default=current.get(
+                            FAST_POLL_INTERVAL, DEFAULT_FAST_POLL_INTERVAL
+                        ),
+                    ): FAST_POLL_INTERVAL_VALIDATOR,
+                }
+            ),
         )
 
 

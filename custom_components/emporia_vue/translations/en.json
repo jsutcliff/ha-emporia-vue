@@ -55,7 +55,9 @@
                     "enable_1m": "Power Minute Average Sensor",
                     "enable_1mon": "Energy This Month Sensor",
                     "password": "Password",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "enable_1s": "Power 1 Second Sensor (live, like the app)",
+                    "fast_poll_interval": "1 second sensor poll interval (seconds)"
                 }
             },
             "tokens": {
@@ -66,7 +68,9 @@
                     "enable_1mon": "Energy This Month Sensor",
                     "id_token": "ID token",
                     "refresh_token": "Refresh token",
-                    "solar_invert": "Invert Values for Solar Circuits"
+                    "solar_invert": "Invert Values for Solar Circuits",
+                    "enable_1s": "Power 1 Second Sensor (live, like the app)",
+                    "fast_poll_interval": "1 second sensor poll interval (seconds)"
                 },
                 "description": "Use this for Emporia accounts created with Sign in with Google or another SSO provider. Paste the Emporia tokens for the account."
             }
@@ -94,6 +98,18 @@
                 }
             },
             "name": "Set charger current"
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Polling options",
+                "description": "The 1 second sensors show the same live power as the Emporia app. Each poll is one request to Emporia's cloud, so very short intervals may get rate limited.",
+                "data": {
+                    "enable_1s": "Power 1 Second Sensor (live, like the app)",
+                    "fast_poll_interval": "Poll interval (seconds, 1-60)"
+                }
+            }
         }
     }
 }

@@ -45,10 +45,13 @@ from .const import (
     CONF_ID_TOKEN,
     CONF_REFRESH_TOKEN,
     CONFIG_FLOW_SCHEMA,
+    DEFAULT_FAST_POLL_INTERVAL,
     DOMAIN,
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
+    ENABLE_1S,
+    FAST_POLL_INTERVAL,
     SOLAR_INVERT,
     VUE_DATA,
 )
@@ -74,6 +77,7 @@ CONFIG_SCHEMA = vol.Schema(
 DEVICE_GIDS: list[str] = []
 DEVICE_INFORMATION: dict[int, VueDevice] = {}
 DEVICES_ONLINE: list[str] = []
+LAST_SECOND_DATA: dict[str, Any] = {}
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
@@ -108,6 +112,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             data={
                 CONF_EMAIL: conf[CONF_EMAIL],
                 CONF_PASSWORD: conf[CONF_PASSWORD],
+                ENABLE_1S: conf[ENABLE_1S],
+                FAST_POLL_INTERVAL: conf[FAST_POLL_INTERVAL],
                 ENABLE_1M: conf[ENABLE_1M],
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
@@ -158,7 +164,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LAST_DAY_INTEGRATED_MINUTE.clear()
     LAST_MONTH_INTEGRATED_MINUTE.clear()
 
-    entry_data = entry.data
+    # Polling options set via the Configure button override the setup values.
+    entry_data = {**entry.data, **entry.options}
     _LOGGER.debug(
         "Setting up Emporia Vue with entry data: %s",
         redact_config_data(entry_data),
@@ -224,6 +231,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(DEVICE_INFORMATION.keys()),
             total_channels,
         )
+
+        async def async_update_data_1sec() -> dict:
+            """Fetch 1-second power data (what the Emporia app's live view shows)."""
+            data: dict = await update_sensors(vue, [Scale.SECOND.value])
+            if data:
+                global LAST_SECOND_DATA
+                LAST_SECOND_DATA = data
+            return data
 
         async def async_update_data_1min() -> dict:
             """Fetch data from API endpoint at a 1 minute interval.
@@ -343,6 +358,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             await coordinator_1min.async_config_entry_first_refresh()
             _LOGGER.debug("1min Update data: %s", coordinator_1min.data)
+
+        coordinator_1sec = None
+        if entry_data.get(ENABLE_1S, False):
+            fast_poll_interval = int(
+                entry_data.get(FAST_POLL_INTERVAL, DEFAULT_FAST_POLL_INTERVAL)
+            )
+            second_update_method = TolerantUpdateMethod(
+                async_update_data_1sec,
+                name="Second telemetry",
+                logger=_LOGGER,
+                recoverable_exceptions=(UpdateFailed,),
+                tolerated_failures=TOLERATED_UPDATE_FAILURES,
+            )
+            retry_update_methods["second"] = second_update_method
+            coordinator_1sec = DataUpdateCoordinator(
+                hass,
+                _LOGGER,
+                name="second telemetry",
+                update_method=second_update_method,
+                update_interval=timedelta(seconds=fast_poll_interval),
+            )
+            await coordinator_1sec.async_config_entry_first_refresh()
+            _LOGGER.info(
+                "1-second power sensors enabled, polling every %s seconds",
+                fast_poll_interval,
+            )
         coordinator_1mon = None
         if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
             monthly_update_method = TolerantUpdateMethod(
@@ -536,6 +577,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
+        "coordinator_1sec": coordinator_1sec,
         "coordinator_1min": coordinator_1min,
         "coordinator_1mon": coordinator_1mon,
         "coordinator_day_sensor": coordinator_day_sensor,
@@ -543,6 +585,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "device_information": DEVICE_INFORMATION,
         "retry_update_methods": retry_update_methods,
     }
+
+    applied_options = dict(entry.options)
+
+    async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Reload when polling options change (but not on token refreshes)."""
+        if dict(entry.options) != applied_options:
+            await hass.config_entries.async_reload(entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -895,6 +946,12 @@ def determine_reset_datetime(
 
 def handle_none_usage(scale: str, identifier: str):
     """Handle the case of the usage being None by using the previous value or zero."""
+    if (
+        scale == Scale.SECOND.value
+        and identifier in LAST_SECOND_DATA
+        and "usage" in LAST_SECOND_DATA[identifier]
+    ):
+        return LAST_SECOND_DATA[identifier]["usage"]
     if (
         scale is Scale.MINUTE.value
         and identifier in LAST_MINUTE_DATA

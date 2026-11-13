@@ -45,6 +45,26 @@ Configuration is done directly in the Home Assistant UI, no manual config file e
 5. In the UI that opens, enter the email and password used for the Emporia App. If your account uses Google/Apple, see the [Google/Apple Accounts](#googleapple-accounts) section below.
 6. Done! You should now have a sensor for each "channel".
 
+### Fast (1 Second) Power Sensors
+
+The standard **Power Minute Average** sensors update once per minute. To get the
+same live power readings the Emporia app shows, enable **Power 1 Second Sensor**.
+This adds a `Power 1 Second` sensor for each channel.
+
+The poll rate is set on the integration's **Configure** button (Settings →
+Devices & Services → Emporia Vue → Configure). You can choose 1–60 seconds, and
+the default is 5. Saving reloads the integration with the new rate.
+
+Notes:
+
+- Each poll is one request to Emporia's cloud for all your devices. Very short
+  intervals may get rate limited by Emporia. If the **Emporia API Retries**
+  sensor keeps climbing, raise the interval.
+- 1 second sensors write a lot of history. Consider excluding them from the
+  recorder, or use a longer interval, if your database size matters.
+- Keep the minute, day and month sensors enabled for the Energy dashboard. The
+  1 second sensors are instantaneous power only.
+
 ### API Diagnostics
 
 The integration creates two diagnostic sensors for monitoring Emporia cloud
