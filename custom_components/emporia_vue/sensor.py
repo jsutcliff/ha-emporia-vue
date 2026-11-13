@@ -65,10 +65,35 @@ async def async_setup_entry(
                 for identifier in wanted(coordinator)
             )
 
+    device_information: dict[int, VueDevice] = hass.data[DOMAIN][config_entry.entry_id][
+        "device_information"
+    ]
+    coordinator_grid = hass.data[DOMAIN][config_entry.entry_id].get("coordinator_grid")
+    if coordinator_grid and coordinator_grid.data:
+        async_add_entities(
+            EmporiaGridEnergySensor(
+                coordinator_grid,
+                gid,
+                direction,
+                mains_device_info(device_information.get(int(gid)), gid),
+            )
+            for gid in coordinator_grid.data
+            for direction in ("import", "export")
+        )
+
     coordinator_phase = hass.data[DOMAIN][config_entry.entry_id].get("coordinator_phase")
     if coordinator_phase and coordinator_phase.data:
         async_add_entities(
-            EmporiaPhaseSensor(coordinator_phase, identifier)
+            EmporiaPhaseSensor(
+                coordinator_phase,
+                identifier,
+                mains_device_info(
+                    device_information.get(
+                        int(coordinator_phase.data[identifier]["device_gid"])
+                    ),
+                    coordinator_phase.data[identifier]["device_gid"],
+                ),
+            )
             for identifier in coordinator_phase.data
         )
 
@@ -97,6 +122,23 @@ async def async_setup_entry(
             for gid in coordinator_device_status.data
             if int(gid) in device_information and device_information[int(gid)].ev_charger
         )
+
+
+def mains_device_info(device: VueDevice | None, gid) -> DeviceInfo:
+    """Return device info for a monitor's mains, named like its Power sensor."""
+    identifiers = {(DOMAIN, f"{gid}-1,2,3")}
+    if device is None:
+        return DeviceInfo(identifiers=identifiers)
+    mains_name = next(
+        (c.name for c in device.channels if c.channel_num == "1,2,3" and c.name), None
+    )
+    return DeviceInfo(
+        identifiers=identifiers,
+        name=mains_name or device.device_name or device.model or "Emporia Vue",
+        model=device.model,
+        sw_version=device.firmware,
+        manufacturer="Emporia",
+    )
 
 
 def is_circuit_channel(channel_num: str) -> bool:
@@ -263,6 +305,39 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         return self._scale
 
 
+class EmporiaGridEnergySensor(CoordinatorEntity, SensorEntity):  # type: ignore
+    """Energy imported from or exported to the grid, for the Energy dashboard."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 3
+
+    def __init__(
+        self, coordinator, gid: str, direction: str, device_info: DeviceInfo
+    ) -> None:
+        """Initialize the import or export sensor for one monitor."""
+        super().__init__(coordinator)
+        self._gid = gid
+        self._key = f"{direction}_kwh"
+        self._attr_name = f"Grid {direction.capitalize()} Energy"
+        self._attr_unique_id = f"sensor.emporia_vue.grid_{direction}.{gid}"
+        self._attr_device_info = device_info
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the running total."""
+        totals = (self.coordinator.data or {}).get(self._gid)
+        return round(totals[self._key], 6) if totals else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the last minute counted."""
+        totals = (self.coordinator.data or {}).get(self._gid)
+        return {"counted_through": totals["last_minute"]} if totals else {}
+
+
 class EmporiaPhaseSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     """Voltage or current of one mains leg, attached to the mains device."""
 
@@ -270,7 +345,7 @@ class EmporiaPhaseSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
 
-    def __init__(self, coordinator, identifier: str) -> None:
+    def __init__(self, coordinator, identifier: str, device_info: DeviceInfo) -> None:
         """Initialize from the coordinator's data for this leg."""
         super().__init__(coordinator)
         self._id = identifier
@@ -290,10 +365,7 @@ class EmporiaPhaseSensor(CoordinatorEntity, SensorEntity):  # type: ignore
         self._attr_unique_id = (
             f"sensor.emporia_vue.{kind}.{data['device_gid']}-{channel_num}"
         )
-        # Link to the existing mains device without renaming it
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{data['device_gid']}-1,2,3")}
-        )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self) -> float | None:
