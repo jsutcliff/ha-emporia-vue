@@ -80,7 +80,6 @@ def mock_vue():
     vue.login.return_value = True
     vue.get_devices.return_value = [make_device()]
     vue.get_device_list_usage.side_effect = make_usage
-    vue.get_chart_usage.return_value = ([], None)
     with patch("custom_components.emporia_vue.PyEmVue", return_value=vue):
         yield vue
 

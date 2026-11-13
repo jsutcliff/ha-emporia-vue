@@ -57,7 +57,6 @@ from .const import (
     UPDATE_INTERVAL,
     VUE_DATA,
 )
-from .grid import GridEnergyTracker
 from .resilience import TolerantUpdateMethod, is_newer_sample
 
 apply_cognito_compat()
@@ -455,35 +454,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as err:
                 raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
 
-        # Grid import/export totals for the Energy dashboard
-        grid_tracker = GridEnergyTracker(hass, entry.entry_id)
-        await grid_tracker.async_load()
-        mains_gids = [
-            gid
-            for gid, device in DEVICE_INFORMATION.items()
-            if any(channel.channel_num == "1,2,3" for channel in device.channels)
-        ]
-
-        async def async_update_grid() -> dict[str, Any]:
-            return await grid_tracker.async_update(vue, mains_gids)
-
-        grid_update_method = TolerantUpdateMethod(
-            async_update_grid,
-            name="Grid energy",
-            logger=_LOGGER,
-            recoverable_exceptions=(UpdateFailed,),
-            tolerated_failures=TOLERATED_UPDATE_FAILURES,
-        )
-        retry_update_methods["grid"] = grid_update_method
-        coordinator_grid = DataUpdateCoordinator(
-            hass,
-            _LOGGER,
-            name="grid energy",
-            update_method=grid_update_method,
-            update_interval=timedelta(minutes=1),
-        )
-        await coordinator_grid.async_config_entry_first_refresh()
-
         coordinator_phase = None
         if entry_data.get(PHASE_SENSORS, False):
             phase_scale = Scale.SECOND.value if live_power else Scale.MINUTE.value
@@ -639,7 +609,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator_day_sensor": coordinator_day_sensor,
         "coordinator_device_status": coordinator_device_status,
         "coordinator_phase": coordinator_phase,
-        "coordinator_grid": coordinator_grid,
         "device_information": DEVICE_INFORMATION,
         CIRCUIT_SENSORS: bool(entry_data.get(CIRCUIT_SENSORS, True)),
         "retry_update_methods": retry_update_methods,

@@ -72,21 +72,6 @@ Notes:
 - Frequent updates write a lot of history. Consider excluding these sensors
   from the recorder, or use a longer interval, if database size matters.
 
-### Energy Dashboard and Solar
-
-Emporia reports the mains as **net** energy: it goes negative when solar is
-flowing back to the grid, so the mains Energy Today / This Month sensors can
-go down. The Energy dashboard needs separate, ever-increasing totals, so the
-integration also creates **Grid Import Energy** and **Grid Export Energy**
-sensors on the mains device. Each minute of Emporia's net mains energy counts
-as import if positive and export if negative. Minutes missed while Home
-Assistant was down are filled in from Emporia's history (up to 6 hours).
-
-In Settings → Dashboards → Energy, add a grid source with **Grid Import
-Energy** as the import meter, **Grid Export Energy** as the export meter, and
-the mains **Power** sensor as the power sensor (positive importing, negative
-exporting).
-
 ### API Diagnostics
 
 The integration creates two diagnostic sensors for monitoring Emporia cloud
