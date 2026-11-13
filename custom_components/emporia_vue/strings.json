@@ -10,12 +10,14 @@
         "data": {
           "email": "[%key:common::config_flow::data::email%]",
           "password": "[%key:common::config_flow::data::password%]",
-          "enable_1m": "Power Minute Average Sensor",
+          "enable_1m": "Power Sensor",
           "enable_1d": "Energy Today Sensor",
           "enable_1mon": "Energy This Month Sensor",
           "solar_invert": "Invert Values for Solar Circuits",
-          "enable_1s": "Power 1 Second Sensor (live, like the app)",
-          "fast_poll_interval": "1 second sensor poll interval (seconds)"
+          "live_power": "Live power data (like the Emporia app)",
+          "update_interval": "Live power update interval (seconds, 1-60)",
+          "circuit_sensors": "Individual circuit sensors",
+          "phase_sensors": "Phase voltage and current sensors"
         }
       },
       "tokens": {
@@ -28,8 +30,10 @@
           "enable_1d": "[%key:component::emporia_vue::config::step::email_password::data::enable_1d%]",
           "enable_1mon": "[%key:component::emporia_vue::config::step::email_password::data::enable_1mon%]",
           "solar_invert": "[%key:component::emporia_vue::config::step::email_password::data::solar_invert%]",
-          "enable_1s": "[%key:component::emporia_vue::config::step::email_password::data::enable_1s%]",
-          "fast_poll_interval": "[%key:component::emporia_vue::config::step::email_password::data::fast_poll_interval%]"
+          "live_power": "[%key:component::emporia_vue::config::step::email_password::data::live_power%]",
+          "update_interval": "[%key:component::emporia_vue::config::step::email_password::data::update_interval%]",
+          "circuit_sensors": "[%key:component::emporia_vue::config::step::email_password::data::circuit_sensors%]",
+          "phase_sensors": "[%key:component::emporia_vue::config::step::email_password::data::phase_sensors%]"
         }
       },
       "reconfigure": {
@@ -103,11 +107,13 @@
   "options": {
     "step": {
       "init": {
-        "title": "Polling options",
-        "description": "The 1 second sensors show the same live power as the Emporia app. Each poll is one request to Emporia's cloud, so very short intervals may get rate limited.",
+        "title": "Sensor options",
+        "description": "Individual circuit sensors: turn off if you only use the mains clamps; circuit sensors and devices are removed. Live power data: off shows the 1-minute average updated every minute, on shows live power at the interval below. Each live update is one request to Emporia's cloud, so very short intervals may get rate limited. Phase voltage and current add two more requests per update.",
         "data": {
-          "enable_1s": "[%key:component::emporia_vue::config::step::email_password::data::enable_1s%]",
-          "fast_poll_interval": "Poll interval (seconds, 1-60)"
+          "circuit_sensors": "[%key:component::emporia_vue::config::step::email_password::data::circuit_sensors%]",
+          "live_power": "[%key:component::emporia_vue::config::step::email_password::data::live_power%]",
+          "update_interval": "[%key:component::emporia_vue::config::step::email_password::data::update_interval%]",
+          "phase_sensors": "[%key:component::emporia_vue::config::step::email_password::data::phase_sensors%]"
         }
       }
     }

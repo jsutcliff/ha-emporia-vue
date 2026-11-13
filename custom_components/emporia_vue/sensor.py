@@ -12,13 +12,20 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfTime
+from homeassistant.const import (
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CIRCUIT_SENSORS, DOMAIN
 from .resilience import TolerantUpdateMethod
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -31,7 +38,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensor platform."""
-    coordinator_1sec = hass.data[DOMAIN][config_entry.entry_id].get("coordinator_1sec")
     coordinator_1min = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1min"]
     coordinator_1mon = hass.data[DOMAIN][config_entry.entry_id]["coordinator_1mon"]
     coordinator_day_sensor = hass.data[DOMAIN][config_entry.entry_id][
@@ -39,29 +45,31 @@ async def async_setup_entry(
     ]
 
     _LOGGER.info(hass.data[DOMAIN][config_entry.entry_id])
+    circuit_sensors: bool = hass.data[DOMAIN][config_entry.entry_id].get(
+        CIRCUIT_SENSORS, True
+    )
+    _async_remove_stale_entries(hass, config_entry, circuit_sensors)
 
-    if coordinator_1sec:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1sec, identifier)
-            for identifier in coordinator_1sec.data
-        )
+    def wanted(coordinator) -> list[str]:
+        """Return the identifiers to create sensors for."""
+        return [
+            identifier
+            for identifier, data in coordinator.data.items()
+            if circuit_sensors or not is_circuit_channel(data["channel_num"])
+        ]
 
-    if coordinator_1min:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_1min, identifier)
-            for _, identifier in enumerate(coordinator_1min.data)
-        )
+    for coordinator in (coordinator_1min, coordinator_1mon, coordinator_day_sensor):
+        if coordinator:
+            async_add_entities(
+                CurrentVuePowerSensor(coordinator, identifier)
+                for identifier in wanted(coordinator)
+            )
 
-    if coordinator_1mon:
+    coordinator_phase = hass.data[DOMAIN][config_entry.entry_id].get("coordinator_phase")
+    if coordinator_phase and coordinator_phase.data:
         async_add_entities(
-            CurrentVuePowerSensor(coordinator_1mon, identifier)
-            for _, identifier in enumerate(coordinator_1mon.data)
-        )
-
-    if coordinator_day_sensor:
-        async_add_entities(
-            CurrentVuePowerSensor(coordinator_day_sensor, identifier)
-            for _, identifier in enumerate(coordinator_day_sensor.data)
+            EmporiaPhaseSensor(coordinator_phase, identifier)
+            for identifier in coordinator_phase.data
         )
 
     retry_update_methods: dict[str, TolerantUpdateMethod] = hass.data[DOMAIN][
@@ -71,7 +79,7 @@ async def async_setup_entry(
         async_add_entities(
             [EmporiaApiRetrySensor(retry_update_methods, config_entry.entry_id)]
         )
-        if "minute" in retry_update_methods:
+        if "power" in retry_update_methods:
             async_add_entities(
                 [EmporiaApiLatencySensor(retry_update_methods, config_entry.entry_id)]
             )
@@ -89,6 +97,40 @@ async def async_setup_entry(
             for gid in coordinator_device_status.data
             if int(gid) in device_information and device_information[int(gid)].ev_charger
         )
+
+
+def is_circuit_channel(channel_num: str) -> bool:
+    """Return True for an individual CT circuit (numbered channel).
+
+    Aggregate channels such as "1,2,3" (the mains), Balance and
+    MainsFromGrid represent the monitor itself.
+    """
+    return channel_num.isdigit()
+
+
+@callback
+def _async_remove_stale_entries(
+    hass: HomeAssistant, config_entry: ConfigEntry, circuit_sensors: bool
+) -> None:
+    """Remove entities this integration no longer provides."""
+    entity_registry = er.async_get(hass)
+    for entry in er.async_entries_for_config_entry(
+        entity_registry, config_entry.entry_id
+    ):
+        # Separate 1-second entities from an earlier version of this fork
+        if entry.unique_id.startswith(f"sensor.emporia_vue.{Scale.SECOND.value}."):
+            entity_registry.async_remove(entry.entity_id)
+
+    if circuit_sensors:
+        return
+    device_registry = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(
+        device_registry, config_entry.entry_id
+    ):
+        for domain, identifier in device.identifiers:
+            if domain == DOMAIN and is_circuit_channel(identifier.rsplit("-", 1)[-1]):
+                device_registry.async_remove_device(device.id)
+                break
 
 
 class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
@@ -132,7 +174,7 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             self._attr_device_class = SensorDeviceClass.POWER
             self._attr_state_class = SensorStateClass.MEASUREMENT
             self._attr_suggested_display_precision = 1
-            self._attr_name = f"Power {self.scale_readable()}"
+            self._attr_name = "Power"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -145,12 +187,12 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
             # up as a pile of same-named devices (#379, #328).
             # Aggregate channels ("1,2,3", MainsFromGrid, Balance, ...) legitimately
             # represent the monitor itself, so those keep the monitor's name.
-            if self._channel.channel_num.isdigit():
-                device_name = (
-                    f"{self._device.device_name} Circuit {self._channel.channel_num}"
-                )
+            # Monitors without a name in the Emporia app fall back to the model
+            monitor_name = self._device.device_name or self._device.model or "Emporia Vue"
+            if is_circuit_channel(self._channel.channel_num):
+                device_name = f"{monitor_name} Circuit {self._channel.channel_num}"
             else:
-                device_name = self._device.device_name
+                device_name = monitor_name
         return DeviceInfo(
             identifiers={
                 (DOMAIN, f"{self._device.device_gid}-{self._channel.channel_num}")
@@ -179,7 +221,8 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
     @property
     def unique_id(self) -> str:
         """Return the Unique ID for the sensor."""
-        if self._scale == Scale.MINUTE.value:
+        if self._scale in (Scale.MINUTE.value, Scale.SECOND.value):
+            # Live and minute-average data feed the same Power entity
             return (
                 "sensor.emporia_vue.instant."
                 f"{self._channel.device_gid}-{self._channel.channel_num}"
@@ -211,15 +254,52 @@ class CurrentVuePowerSensor(CoordinatorEntity, SensorEntity):  # type: ignore
 
     def scale_readable(self):
         """Return a human readable scale."""
-        if self._scale == Scale.SECOND.value:
-            return "1 Second"
-        if self._scale == Scale.MINUTE.value:
-            return "Minute Average"
+        if self._scale in (Scale.MINUTE.value, Scale.SECOND.value):
+            return ""
         if self._scale == Scale.DAY.value:
             return "Today"
         if self._scale == Scale.MONTH.value:
             return "This Month"
         return self._scale
+
+
+class EmporiaPhaseSensor(CoordinatorEntity, SensorEntity):  # type: ignore
+    """Voltage or current of one mains leg, attached to the mains device."""
+
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator, identifier: str) -> None:
+        """Initialize from the coordinator's data for this leg."""
+        super().__init__(coordinator)
+        self._id = identifier
+        data = coordinator.data[identifier]
+        kind: str = data["kind"]
+        channel_num: str = str(data["channel_num"])
+        # Mains_A -> A, Mains_1 -> 1
+        leg = channel_num.split("_", 1)[-1] if "_" in channel_num else channel_num
+        if kind == "voltage":
+            self._attr_device_class = SensorDeviceClass.VOLTAGE
+            self._attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
+            self._attr_name = f"Voltage Phase {leg}"
+        else:
+            self._attr_device_class = SensorDeviceClass.CURRENT
+            self._attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+            self._attr_name = f"Current Phase {leg}"
+        self._attr_unique_id = (
+            f"sensor.emporia_vue.{kind}.{data['device_gid']}-{channel_num}"
+        )
+        # Link to the existing mains device without renaming it
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{data['device_gid']}-1,2,3")}
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the latest reading."""
+        data = self.coordinator.data.get(self._id) if self.coordinator.data else None
+        return data["value"] if data else None
 
 
 class EmporiaUpdateTelemetrySensor(SensorEntity):
@@ -310,13 +390,13 @@ class EmporiaApiLatencySensor(EmporiaUpdateTelemetrySensor):
         entry_id: str,
     ) -> None:
         """Initialize the API latency sensor."""
-        super().__init__(update_methods, listener_names={"minute"})
+        super().__init__(update_methods, listener_names={"power"})
         self._attr_unique_id = f"sensor.emporia_vue.api_latency.{entry_id}"
 
     @property
     def native_value(self) -> float | None:
         """Return the latest minute telemetry update duration in milliseconds."""
-        minute_update = self._update_methods.get("minute")
+        minute_update = self._update_methods.get("power")
         if not minute_update or minute_update.last_duration_ms is None:
             return None
         return round(minute_update.last_duration_ms, 1)
@@ -324,7 +404,7 @@ class EmporiaApiLatencySensor(EmporiaUpdateTelemetrySensor):
     @property
     def extra_state_attributes(self) -> dict:
         """Return per-coordinator update durations."""
-        minute_update = self._update_methods["minute"]
+        minute_update = self._update_methods["power"]
         return {
             "update_latency_ms": {
                 name: round(update_method.last_duration_ms, 1)

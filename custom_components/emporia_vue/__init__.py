@@ -20,7 +20,7 @@ from pyemvue.device import (
     VueDeviceChannelUsage,
     VueUsageDevice,
 )
-from pyemvue.enums import Scale
+from pyemvue.enums import Scale, Unit
 import requests
 import voluptuous as vol
 
@@ -41,18 +41,20 @@ from .const import (
     AUTH_METHOD,
     AUTH_METHOD_EMAIL_PASSWORD,
     AUTH_METHOD_TOKENS,
+    CIRCUIT_SENSORS,
     CONF_ACCESS_TOKEN,
     CONF_ID_TOKEN,
     CONF_REFRESH_TOKEN,
     CONFIG_FLOW_SCHEMA,
-    DEFAULT_FAST_POLL_INTERVAL,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
-    ENABLE_1S,
-    FAST_POLL_INTERVAL,
+    LIVE_POWER,
+    PHASE_SENSORS,
     SOLAR_INVERT,
+    UPDATE_INTERVAL,
     VUE_DATA,
 )
 from .resilience import TolerantUpdateMethod, is_newer_sample
@@ -112,8 +114,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             data={
                 CONF_EMAIL: conf[CONF_EMAIL],
                 CONF_PASSWORD: conf[CONF_PASSWORD],
-                ENABLE_1S: conf[ENABLE_1S],
-                FAST_POLL_INTERVAL: conf[FAST_POLL_INTERVAL],
+                CIRCUIT_SENSORS: conf[CIRCUIT_SENSORS],
+                LIVE_POWER: conf[LIVE_POWER],
+                PHASE_SENSORS: conf[PHASE_SENSORS],
+                UPDATE_INTERVAL: conf[UPDATE_INTERVAL],
                 ENABLE_1M: conf[ENABLE_1M],
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
@@ -232,12 +236,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             total_channels,
         )
 
-        async def async_update_data_1sec() -> dict:
-            """Fetch 1-second power data (what the Emporia app's live view shows)."""
+        live_power: bool = bool(entry_data.get(LIVE_POWER, False))
+        update_interval = timedelta(minutes=1)
+        if live_power:
+            update_interval = timedelta(
+                seconds=int(entry_data.get(UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL))
+            )
+        last_minute_fetch: datetime | None = None
+
+        async def async_update_live_power() -> dict:
+            """Fetch live power (the Emporia app's real-time view).
+
+            The day/month energy sensors integrate minute data, so that keeps
+            being fetched once a minute in the background.
+            """
+            nonlocal last_minute_fetch
             data: dict = await update_sensors(vue, [Scale.SECOND.value])
             if data:
                 global LAST_SECOND_DATA
                 LAST_SECOND_DATA = data
+            now = datetime.now(UTC)
+            if not last_minute_fetch or now - last_minute_fetch >= timedelta(minutes=1):
+                last_minute_fetch = now
+                try:
+                    await async_update_data_1min()
+                except UpdateFailed as err:
+                    _LOGGER.warning("Minute data for energy sensors failed: %s", err)
             return data
 
         async def async_update_data_1min() -> dict:
@@ -339,50 +363,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator_1min = None
         retry_update_methods: dict[str, TolerantUpdateMethod] = {}
         if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
-            minute_update_method = TolerantUpdateMethod(
-                async_update_data_1min,
-                name="Minute telemetry",
+            power_update_method = TolerantUpdateMethod(
+                async_update_live_power if live_power else async_update_data_1min,
+                name="Power telemetry",
                 logger=_LOGGER,
                 recoverable_exceptions=(UpdateFailed,),
                 tolerated_failures=TOLERATED_UPDATE_FAILURES,
             )
-            retry_update_methods["minute"] = minute_update_method
+            retry_update_methods["power"] = power_update_method
             coordinator_1min = DataUpdateCoordinator(
                 hass,
                 _LOGGER,
                 # Name of the data. For logging purposes.
-                name="minute telemetry",
-                update_method=minute_update_method,
+                name="power telemetry",
+                update_method=power_update_method,
                 # Polling interval. Will only be polled if there are subscribers.
-                update_interval=timedelta(minutes=1),
+                update_interval=update_interval,
             )
             await coordinator_1min.async_config_entry_first_refresh()
-            _LOGGER.debug("1min Update data: %s", coordinator_1min.data)
-
-        coordinator_1sec = None
-        if entry_data.get(ENABLE_1S, False):
-            fast_poll_interval = int(
-                entry_data.get(FAST_POLL_INTERVAL, DEFAULT_FAST_POLL_INTERVAL)
-            )
-            second_update_method = TolerantUpdateMethod(
-                async_update_data_1sec,
-                name="Second telemetry",
-                logger=_LOGGER,
-                recoverable_exceptions=(UpdateFailed,),
-                tolerated_failures=TOLERATED_UPDATE_FAILURES,
-            )
-            retry_update_methods["second"] = second_update_method
-            coordinator_1sec = DataUpdateCoordinator(
-                hass,
-                _LOGGER,
-                name="second telemetry",
-                update_method=second_update_method,
-                update_interval=timedelta(seconds=fast_poll_interval),
-            )
-            await coordinator_1sec.async_config_entry_first_refresh()
             _LOGGER.info(
-                "1-second power sensors enabled, polling every %s seconds",
-                fast_poll_interval,
+                "Power sensors use %s data, updating every %s",
+                "live" if live_power else "minute average",
+                update_interval,
             )
         coordinator_1mon = None
         if ENABLE_1MON not in entry_data or entry_data[ENABLE_1MON]:
@@ -451,6 +453,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return data
             except Exception as err:
                 raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+
+        coordinator_phase = None
+        if entry_data.get(PHASE_SENSORS, False):
+            phase_scale = Scale.SECOND.value if live_power else Scale.MINUTE.value
+
+            async def async_update_phases() -> dict[str, Any]:
+                """Fetch per-leg voltage and current at the power update rate."""
+                return await update_phase_sensors(vue, phase_scale)
+
+            phase_update_method = TolerantUpdateMethod(
+                async_update_phases,
+                name="Phase telemetry",
+                logger=_LOGGER,
+                recoverable_exceptions=(UpdateFailed,),
+                tolerated_failures=TOLERATED_UPDATE_FAILURES,
+            )
+            retry_update_methods["phase"] = phase_update_method
+            coordinator_phase = DataUpdateCoordinator(
+                hass,
+                _LOGGER,
+                name="phase telemetry",
+                update_method=phase_update_method,
+                update_interval=update_interval,
+            )
+            await coordinator_phase.async_config_entry_first_refresh()
 
         coordinator_device_status = None
         if has_controllable_devices:
@@ -577,12 +604,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
-        "coordinator_1sec": coordinator_1sec,
         "coordinator_1min": coordinator_1min,
         "coordinator_1mon": coordinator_1mon,
         "coordinator_day_sensor": coordinator_day_sensor,
         "coordinator_device_status": coordinator_device_status,
+        "coordinator_phase": coordinator_phase,
         "device_information": DEVICE_INFORMATION,
+        CIRCUIT_SENSORS: bool(entry_data.get(CIRCUIT_SENSORS, True)),
         "retry_update_methods": retry_update_methods,
     }
 
@@ -655,6 +683,66 @@ async def update_sensors(vue: PyEmVue, scales: list[str]) -> dict:
     except Exception as err:
         _LOGGER.debug("Error communicating with Emporia API", exc_info=True)
         raise UpdateFailed(f"Error communicating with Emporia API: {err}") from err
+
+
+# AmpHours over one sample period -> amps
+AMP_HOUR_SCALE_FACTOR = {Scale.SECOND.value: 3600, Scale.MINUTE.value: 60}
+PHASE_UNITS = {"voltage": Unit.VOLTS.value, "current": Unit.AMPHOURS.value}
+
+
+def is_phase_channel(channel_num: str) -> bool:
+    """Return True for a per-leg mains channel (e.g. Mains_A, Mains_B)."""
+    return channel_num.lower().startswith("mains")
+
+
+async def update_phase_sensors(vue: PyEmVue, scale: str) -> dict[str, Any]:
+    """Fetch per-leg mains voltage and current.
+
+    Emporia only splits the mains into legs when asked for Voltage or
+    AmpHours; watts come back as the combined mains.
+    """
+    loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+    data: dict[str, Any] = {}
+    try:
+        for kind, unit in PHASE_UNITS.items():
+            usage_dict: dict[int, VueUsageDevice] = await loop.run_in_executor(
+                None,
+                partial(
+                    vue.get_device_list_usage,
+                    DEVICE_GIDS,
+                    datetime.now(UTC),
+                    scale,
+                    unit,
+                    max_retry_attempts=1,
+                ),
+            )
+            seen: list[str] = []
+            for device in (usage_dict or {}).values():
+                for channel in (device.channels or {}).values():
+                    seen.append(str(channel.channel_num))
+                    if not is_phase_channel(str(channel.channel_num)):
+                        continue
+                    value = channel.usage
+                    if value is not None and kind == "current":
+                        value = value * AMP_HOUR_SCALE_FACTOR[scale]
+                    data[f"{device.device_gid}-{channel.channel_num}-{kind}"] = {
+                        "device_gid": device.device_gid,
+                        "channel_num": channel.channel_num,
+                        "kind": kind,
+                        "value": value,
+                    }
+            if not any(is_phase_channel(num) for num in seen):
+                _LOGGER.warning(
+                    "Emporia returned no per-leg %s channels at scale %s. "
+                    "Channels returned: %s",
+                    kind,
+                    scale,
+                    sorted(set(seen)),
+                )
+    except Exception as err:
+        _LOGGER.debug("Error fetching phase data from Emporia API", exc_info=True)
+        raise UpdateFailed(f"Error fetching phase data: {err}") from err
+    return data
 
 
 def flatten_usage_data(

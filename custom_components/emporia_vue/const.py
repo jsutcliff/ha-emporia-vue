@@ -16,11 +16,13 @@ CONF_OAUTH_PROVIDER = "oauth_provider"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_ID_TOKEN = "id_token"
 CONF_REFRESH_TOKEN = "refresh_token"
-ENABLE_1S = "enable_1s"
-FAST_POLL_INTERVAL = "fast_poll_interval"
-DEFAULT_FAST_POLL_INTERVAL = 5
-MIN_FAST_POLL_INTERVAL = 1
-MAX_FAST_POLL_INTERVAL = 60
+LIVE_POWER = "live_power"
+CIRCUIT_SENSORS = "circuit_sensors"
+PHASE_SENSORS = "phase_sensors"
+UPDATE_INTERVAL = "update_interval"
+DEFAULT_UPDATE_INTERVAL = 5
+MIN_UPDATE_INTERVAL = 1
+MAX_UPDATE_INTERVAL = 60
 ENABLE_1M = "enable_1m"
 ENABLE_1D = "enable_1d"
 ENABLE_1MON = "enable_1mon"
@@ -41,17 +43,19 @@ AUTH_METHOD_SCHEMA = vol.Schema(
     }
 )
 
-FAST_POLL_INTERVAL_VALIDATOR = vol.All(
+UPDATE_INTERVAL_VALIDATOR = vol.All(
     vol.Coerce(int),
-    vol.Range(min=MIN_FAST_POLL_INTERVAL, max=MAX_FAST_POLL_INTERVAL),
+    vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL),
 )
 
 CONFIG_OPTIONS_SCHEMA = {
-    vol.Optional(ENABLE_1S, default=False): cv.boolean,
-    vol.Optional(
-        FAST_POLL_INTERVAL, default=DEFAULT_FAST_POLL_INTERVAL
-    ): FAST_POLL_INTERVAL_VALIDATOR,
+    vol.Optional(CIRCUIT_SENSORS, default=True): cv.boolean,
     vol.Optional(ENABLE_1M, default=True): cv.boolean,
+    vol.Optional(LIVE_POWER, default=False): cv.boolean,
+    vol.Optional(PHASE_SENSORS, default=False): cv.boolean,
+    vol.Optional(
+        UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL
+    ): UPDATE_INTERVAL_VALIDATOR,
     vol.Optional(ENABLE_1D, default=True): cv.boolean,
     vol.Optional(ENABLE_1MON, default=True): cv.boolean,
     vol.Optional(SOLAR_INVERT, default=True): cv.boolean,

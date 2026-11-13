@@ -45,25 +45,32 @@ Configuration is done directly in the Home Assistant UI, no manual config file e
 5. In the UI that opens, enter the email and password used for the Emporia App. If your account uses Google/Apple, see the [Google/Apple Accounts](#googleapple-accounts) section below.
 6. Done! You should now have a sensor for each "channel".
 
-### Fast (1 Second) Power Sensors
+### Sensor Options
 
-The standard **Power Minute Average** sensors update once per minute. To get the
-same live power readings the Emporia app shows, enable **Power 1 Second Sensor**.
-This adds a `Power 1 Second` sensor for each channel.
+These are set with the integration's **Configure** button (Settings → Devices &
+Services → Emporia Vue → Configure). Saving reloads the integration.
 
-The poll rate is set on the integration's **Configure** button (Settings →
-Devices & Services → Emporia Vue → Configure). You can choose 1–60 seconds, and
-the default is 5. Saving reloads the integration with the new rate.
+- **Individual circuit sensors** (default on): turn off if you only use the
+  mains clamps. Only the mains sensors are created, and existing circuit
+  sensors and devices are removed.
+- **Live power data** (default off): off, each **Power** sensor shows the
+  average over the last minute, updated once a minute. On, the same sensor
+  shows the live readings the Emporia app shows.
+- **Live power update interval** (1–60 seconds, default 5): how often live
+  data is fetched.
+- **Phase voltage and current sensors** (default off): adds **Voltage Phase
+  A/B** and **Current Phase A/B** sensors on the mains device. They update at
+  the same rate as Power (live or once a minute).
 
 Notes:
 
-- Each poll is one request to Emporia's cloud for all your devices. Very short
-  intervals may get rate limited by Emporia. If the **Emporia API Retries**
-  sensor keeps climbing, raise the interval.
-- 1 second sensors write a lot of history. Consider excluding them from the
-  recorder, or use a longer interval, if your database size matters.
-- Keep the minute, day and month sensors enabled for the Energy dashboard. The
-  1 second sensors are instantaneous power only.
+- Each update is one request to Emporia's cloud for all your devices, and
+  phase sensors add two more. Very short intervals may get rate limited. If
+  the **Emporia API Retries** sensor keeps climbing, raise the interval.
+- In live mode the minute data is still fetched once a minute in the
+  background, so the Energy Today / This Month sensors stay exact.
+- Frequent updates write a lot of history. Consider excluding these sensors
+  from the recorder, or use a longer interval, if database size matters.
 
 ### API Diagnostics
 

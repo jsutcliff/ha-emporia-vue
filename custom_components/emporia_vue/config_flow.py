@@ -34,10 +34,12 @@ from .const import (
     ENABLE_1D,
     ENABLE_1M,
     ENABLE_1MON,
-    ENABLE_1S,
-    FAST_POLL_INTERVAL,
-    FAST_POLL_INTERVAL_VALIDATOR,
-    DEFAULT_FAST_POLL_INTERVAL,
+    CIRCUIT_SENSORS,
+    LIVE_POWER,
+    PHASE_SENSORS,
+    UPDATE_INTERVAL,
+    UPDATE_INTERVAL_VALIDATOR,
+    DEFAULT_UPDATE_INTERVAL,
     SOLAR_INVERT,
     TOKEN_CONFIG_FLOW_SCHEMA,
 )
@@ -123,10 +125,10 @@ async def validate_input(data: dict | Mapping[str, Any]) -> dict[str, Any]:
     entry_data = {
         CONFIG_TITLE: f"{hub.vue.customer.email} ({hub.vue.customer.customer_gid})",
         CUSTOMER_GID: f"{hub.vue.customer.customer_gid}",
-        ENABLE_1S: new_data.get(ENABLE_1S, False),
-        FAST_POLL_INTERVAL: new_data.get(
-            FAST_POLL_INTERVAL, DEFAULT_FAST_POLL_INTERVAL
-        ),
+        CIRCUIT_SENSORS: new_data.get(CIRCUIT_SENSORS, True),
+        LIVE_POWER: new_data.get(LIVE_POWER, False),
+        PHASE_SENSORS: new_data.get(PHASE_SENSORS, False),
+        UPDATE_INTERVAL: new_data.get(UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL),
         ENABLE_1M: new_data[ENABLE_1M],
         ENABLE_1D: new_data[ENABLE_1D],
         ENABLE_1MON: new_data[ENABLE_1MON],
@@ -450,7 +452,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
 
 class EmporiaVueOptionsFlow(config_entries.OptionsFlow):
-    """Configure the 1-second power sensors and their poll rate."""
+    """Configure circuit sensors, live power data and its update interval."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -465,14 +467,18 @@ class EmporiaVueOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        ENABLE_1S, default=current.get(ENABLE_1S, False)
+                        CIRCUIT_SENSORS, default=current.get(CIRCUIT_SENSORS, True)
                     ): cv.boolean,
                     vol.Optional(
-                        FAST_POLL_INTERVAL,
-                        default=current.get(
-                            FAST_POLL_INTERVAL, DEFAULT_FAST_POLL_INTERVAL
-                        ),
-                    ): FAST_POLL_INTERVAL_VALIDATOR,
+                        LIVE_POWER, default=current.get(LIVE_POWER, False)
+                    ): cv.boolean,
+                    vol.Optional(
+                        UPDATE_INTERVAL,
+                        default=current.get(UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL),
+                    ): UPDATE_INTERVAL_VALIDATOR,
+                    vol.Optional(
+                        PHASE_SENSORS, default=current.get(PHASE_SENSORS, False)
+                    ): cv.boolean,
                 }
             ),
         )
